@@ -1,0 +1,30 @@
+# NAIS Resolver — resolver.nais.id
+# ─────────────────────────────────────────────────────────────
+
+Options -Indexes -MultiViews
+
+# Clean URL: /resolve → resolve.php
+RewriteEngine On
+RewriteRule ^resolve$ resolve.php [L,QSA]
+
+# Block direct access to the cache directory
+RewriteRule ^cache(/|$) - [F,L]
+
+# Force HTTPS (uncomment when SSL is configured)
+# RewriteCond %{HTTPS} off
+# RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+# Security headers
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+</IfModule>
+
+# Deny access to cache files directly
+<FilesMatch "\.(json)$">
+    <If "%{REQUEST_URI} =~ m|/cache/|">
+        Require all denied
+    </If>
+</FilesMatch>
