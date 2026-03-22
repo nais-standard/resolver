@@ -188,6 +188,12 @@ if ($mcpEndpoint === null && $manifestResult['fetched'] && is_array($manifestRes
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Domain Discovery — attempt to fetch /.well-known/nais-agents.json
+// ─────────────────────────────────────────────────────────────────────────────
+
+$discoveryResult = fetchDomainDiscovery($domain);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Response — assemble the full structured payload
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -223,6 +229,9 @@ $response = [
 
     // Manifest fetch result + schema validation
     'manifest' => $manifestResult,
+
+    // Domain-level multi-agent discovery (nais-agents.json)
+    'domain_discovery' => $discoveryResult,
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -403,6 +412,109 @@ function parseNaisTxt(string $raw): array
     }
 
     return $result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain discovery — /.well-known/nais-agents.json
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Attempt to fetch the domain-level multi-agent discovery document.
+ *
+ * This is the NAIS 1.1 extension that allows a domain to declare multiple
+ * local agents and link to external partner agents. The file is optional —
+ * domains with a single agent can continue using only agent.json.
+ *
+ * @param string $domain Normalized domain name
+ *
+ * @return array{
+ *   found: bool,
+ *   url: string,
+ *   error: string|null,
+ *   data: array|null,
+ *   agents: array|null,
+ *   linked_agents: array|null,
+ *   default_agent: string|null
+ * }
+ */
+function fetchDomainDiscovery(string $domain): array
+{
+    $url = 'https://' . $domain . '/.well-known/nais-agents.json';
+
+    $empty = [
+        'found'          => false,
+        'url'            => $url,
+        'error'          => null,
+        'data'           => null,
+        'agents'         => null,
+        'linked_agents'  => null,
+        'default_agent'  => null,
+    ];
+
+    $ch = curl_init();
+
+    curl_setopt_array($ch, [
+        CURLOPT_URL             => $url,
+        CURLOPT_RETURNTRANSFER  => true,
+        CURLOPT_FOLLOWLOCATION  => true,
+        CURLOPT_MAXREDIRS       => 3,
+        CURLOPT_TIMEOUT         => CURL_TIMEOUT,
+        CURLOPT_CONNECTTIMEOUT  => CURL_CONNECT_TIMEOUT,
+        CURLOPT_SSL_VERIFYPEER  => true,
+        CURLOPT_SSL_VERIFYHOST  => 2,
+        CURLOPT_USERAGENT       => USER_AGENT,
+        CURLOPT_ENCODING        => 'gzip, deflate',
+        CURLOPT_HTTPHEADER      => [
+            'Accept: application/json, */*;q=0.5',
+        ],
+    ]);
+
+    $body      = (string)curl_exec($ch);
+    $status    = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    // Network error — domain discovery is optional, so treat as "not found"
+    if ($curlError !== '') {
+        return array_merge($empty, [
+            'error' => 'Network error: ' . $curlError,
+        ]);
+    }
+
+    // 404 or other non-success — file not published (this is normal for v1.0 domains)
+    if ($status < 200 || $status >= 300) {
+        return $empty; // not found, no error
+    }
+
+    // Size guard
+    if (strlen($body) > MAX_MANIFEST_SIZE) {
+        return array_merge($empty, [
+            'error' => 'nais-agents.json exceeds maximum allowed size.',
+        ]);
+    }
+
+    $data = json_decode($body, true, 32, JSON_BIGINT_AS_STRING);
+
+    if (!is_array($data)) {
+        return array_merge($empty, [
+            'error' => 'nais-agents.json is not valid JSON (' . json_last_error_msg() . ').',
+        ]);
+    }
+
+    // Extract key fields
+    $agents       = isset($data['agents']) && is_array($data['agents']) ? $data['agents'] : null;
+    $linkedAgents = isset($data['linked_agents']) && is_array($data['linked_agents']) ? $data['linked_agents'] : null;
+    $defaultAgent = isset($data['default_agent']) ? (string)$data['default_agent'] : null;
+
+    return [
+        'found'          => true,
+        'url'            => $url,
+        'error'          => null,
+        'data'           => $data,
+        'agents'         => $agents,
+        'linked_agents'  => $linkedAgents,
+        'default_agent'  => $defaultAgent,
+    ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
